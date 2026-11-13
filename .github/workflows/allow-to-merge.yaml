@@ -1,3 +1,4 @@
+
 name: Allow To Merge
 
 on:
@@ -27,31 +28,44 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Starting commit message validation..."
+
+          if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+            echo "::error::Missing pull request commit information."
+            exit 1
+          fi
+
           mapfile -t commits < <(
-            git log --no-merges --format='%s' "$BASE_SHA..$HEAD_SHA"
+            git log --no-merges --format='%s' "${BASE_SHA}..${HEAD_SHA}"
           )
 
           if [[ ${#commits[@]} -eq 0 ]]; then
-            echo "::error::No commits found."
+            echo "::error::No commits found in the pull request."
             exit 1
           fi
+
+          echo "Total commits to validate: ${#commits[@]}"
 
           failed=0
 
           for message in "${commits[@]}"; do
-            echo "Checking: $message"
+            echo "----------------------------------------"
+            echo "Checking commit: $message"
 
-            if [[ "$message" =~ ^DEVOPS-[0-9]+:\ .+ ]]; then
-              echo "Valid commit message."
+            if [[ "$message" =~ ^DEVOPS-[0-9]+:[[:space:]]+.+$ ]]; then
+              echo "PASS: Valid commit message."
             else
-              echo "::error::Invalid commit: $message"
-              echo "Expected: DEVOPS-123: Fix Docker build failure"
+              echo "::error::FAIL: Invalid commit message: $message"
+              echo "Required format: DEVOPS-123: Your commit description"
               failed=1
             fi
           done
 
+          echo "----------------------------------------"
+
           if [[ "$failed" -ne 0 ]]; then
+            echo "::error::One or more commit messages are invalid."
             exit 1
           fi
 
-          echo "All commit messages passed."
+          echo "SUCCESS: All commit messages passed validation."
