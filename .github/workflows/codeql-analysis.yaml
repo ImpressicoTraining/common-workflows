@@ -10,8 +10,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
-  actions: read
 
 jobs:
   codeql:
@@ -32,14 +30,15 @@ jobs:
         uses: github/codeql-action/autobuild@v3
 
       - name: Perform CodeQL analysis
+        id: codeql-analyze
         uses: github/codeql-action/analyze@v3
         with:
-          upload: false
+          upload: never
 
-      - name: Upload SARIF report as workflow artifact
+      - name: Upload SARIF report
         uses: actions/upload-artifact@v4
         with:
           name: codeql-${{ inputs.language }}-sarif
-          path: ${{ runner.temp }}/codeql-results/
+          path: ${{ steps.codeql-analyze.outputs.sarif-output }}
           if-no-files-found: error
           retention-days: 30
