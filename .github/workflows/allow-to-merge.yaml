@@ -1,0 +1,57 @@
+name: Allow To Merge
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate-commit-messages:
+    name: Validate JIRA commit messages
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout pull request commits
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Validate commit message format
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t commits < <(
+            git log --no-merges --format='%s' "$BASE_SHA..$HEAD_SHA"
+          )
+
+          if [[ ${#commits[@]} -eq 0 ]]; then
+            echo "::error::No commits found."
+            exit 1
+          fi
+
+          failed=0
+
+          for message in "${commits[@]}"; do
+            echo "Checking: $message"
+
+            if [[ "$message" =~ ^DEVOPS-[0-9]+:\ .+ ]]; then
+              echo "Valid commit message."
+            else
+              echo "::error::Invalid commit: $message"
+              echo "Expected: DEVOPS-123: Fix Docker build failure"
+              failed=1
+            fi
+          done
+
+          if [[ "$failed" -ne 0 ]]; then
+            exit 1
+          fi
+
+          echo "All commit messages passed."
