@@ -33,3 +33,13 @@ jobs:
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3
+        with:
+          upload: false
+
+      - name: Upload SARIF report as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-${{ inputs.language }}-sarif
+          path: results/
+          if-no-files-found: error
+          retention-days: 30
