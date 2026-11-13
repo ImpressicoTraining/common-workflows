@@ -1,0 +1,97 @@
+
+name: Unit Tests and Coverage
+
+on:
+  workflow_call:
+    inputs:
+      application:
+        description: Application being tested
+        required: true
+        type: string
+
+      test_command:
+        description: Unit test execution command
+        required: false
+        type: string
+        default: ""
+
+      coverage_command:
+        description: Coverage report generation command
+        required: false
+        type: string
+        default: ""
+
+      coverage_threshold:
+        description: Minimum required test coverage percentage
+        required: false
+        type: number
+        default: 75
+
+      execution_enabled:
+        description: Enable actual test and coverage execution
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Unit Tests - ${{ inputs.application }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Validate configuration
+        shell: bash
+        env:
+          TEST_COMMAND: ${{ inputs.test_command }}
+          COVERAGE_COMMAND: ${{ inputs.coverage_command }}
+          COVERAGE_THRESHOLD: ${{ inputs.coverage_threshold }}
+        run: |
+          set -euo pipefail
+
+          echo "Application: ${{ inputs.application }}"
+          echo "Minimum coverage: ${COVERAGE_THRESHOLD}%"
+
+          if ! [[ "$COVERAGE_THRESHOLD" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+             ! awk -v n="$COVERAGE_THRESHOLD" 'BEGIN { exit !(n > 0 && n <= 100) }'; then
+            echo "::error::Coverage threshold must be greater than 0 and at most 100."
+            exit 1
+          fi
+
+          if [[ "${{ inputs.execution_enabled }}" == "true" ]]; then
+            if [[ -z "$TEST_COMMAND" || -z "$COVERAGE_COMMAND" ]]; then
+              echo "::error::Test and coverage commands are required when execution is enabled."
+              exit 1
+            fi
+          fi
+
+      - name: Run unit tests and coverage
+        if: inputs.execution_enabled
+        shell: bash
+        env:
+          TEST_COMMAND: ${{ inputs.test_command }}
+          COVERAGE_COMMAND: ${{ inputs.coverage_command }}
+        run: |
+          set -euo pipefail
+
+          echo "Running unit tests..."
+          bash -e -o pipefail -c "$TEST_COMMAND"
+
+          echo "Generating coverage report..."
+          bash -e -o pipefail -c "$COVERAGE_COMMAND"
+
+      - name: Design-only placeholder
+        if: ${{ !inputs.execution_enabled }}
+        shell: bash
+        run: |
+          echo "Unit test stage is configured."
+          echo "Application: ${{ inputs.application }}"
+          echo "Minimum coverage requirement: ${{ inputs.coverage_threshold }}%"
+          echo "Actual test execution is currently disabled."
+          echo "No coverage result is being claimed."
+          echo "Enable execution after application test suites are available."
