@@ -1,0 +1,174 @@
+
+name: Docker Image Build
+
+on:
+  workflow_call:
+    inputs:
+      application:
+        description: "Application to build: django, frontend, or backend"
+        required: true
+        type: string
+
+      image_name:
+        description: "Local Docker image name"
+        required: true
+        type: string
+
+      image_tag:
+        description: "Docker image tag"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build:
+    name: Build ${{ inputs.application }} image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout application repository
+        uses: actions/checkout@v4
+
+      - name: Validate build inputs
+        shell: bash
+        env:
+          APPLICATION: ${{ inputs.application }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          case "$APPLICATION" in
+            django|frontend|backend)
+              echo "Building application: $APPLICATION"
+              ;;
+            *)
+              echo "Unsupported application: $APPLICATION"
+              exit 1
+              ;;
+          esac
+
+          if [[ ! "$IMAGE_NAME" =~ ^[a-z0-9][a-z0-9._/-]*$ ]]; then
+            echo "Invalid image name: $IMAGE_NAME"
+            exit 1
+          fi
+
+          if [[ ! "$IMAGE_TAG" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$ ]]; then
+            echo "Invalid image tag: $IMAGE_TAG"
+            exit 1
+          fi
+
+      - name: Prepare Docker build context
+        id: context
+        shell: bash
+        env:
+          APPLICATION: ${{ inputs.application }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$APPLICATION" == "django" ]]; then
+            echo "path=." >> "$GITHUB_OUTPUT"
+            echo "dockerfile=./Dockerfile" >> "$GITHUB_OUTPUT"
+
+            test -f Dockerfile
+            test -f pyproject.toml
+            test -f uv.lock
+
+          else
+            CONTEXT="$RUNNER_TEMP/react-node-build-context"
+
+            mkdir -p "$CONTEXT"
+
+            rsync -a \
+              --exclude='.git' \
+              --exclude='node_modules' \
+              --exclude='dist' \
+              --exclude='coverage' \
+              ./ "$CONTEXT/"
+
+            test -f "$CONTEXT/package.json"
+            test -f "$CONTEXT/package-lock.json"
+
+            if [[ "$APPLICATION" == "frontend" ]]; then
+              test -f "$CONTEXT/frontend/Dockerfile"
+              test -f "$CONTEXT/frontend/package.json"
+
+              export BUILD_TARGET=frontend
+              echo "dockerfile=$CONTEXT/frontend/Dockerfile" >> "$GITHUB_OUTPUT"
+
+            else
+              test -f "$CONTEXT/backend/Dockerfile"
+              test -f "$CONTEXT/backend/package.json"
+
+              export BUILD_TARGET=backend
+              echo "dockerfile=$CONTEXT/backend/Dockerfile" >> "$GITHUB_OUTPUT"
+            fi
+
+            node <<'NODE'
+          const fs = require('fs');
+
+          const packagePath = process.env.RUNNER_TEMP +
+            '/react-node-build-context/package.json';
+
+          const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+
+          if (process.env.BUILD_TARGET === 'frontend') {
+            pkg.scripts.build =
+              'npm run build --workspace=frontend && rm -rf dist && cp -a frontend/dist dist';
+          } else {
+            pkg.scripts.build =
+              'npm run build --workspace=backend && rm -rf dist && cp -a backend/dist dist';
+          }
+
+          fs.writeFileSync(
+            packagePath,
+            JSON.stringify(pkg, null, 2) + '\n'
+          );
+          NODE
+
+            echo "path=$CONTEXT" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.context.outputs.path }}
+          file: ${{ steps.context.outputs.dockerfile }}
+          push: false
+          load: true
+          tags: ${{ inputs.image_name }}:${{ inputs.image_tag }}
+          cache-from: type=gha,scope=${{ inputs.application }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.application }}
+
+      - name: Verify Docker image
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          docker image inspect "$IMAGE_NAME:$IMAGE_TAG"
+
+          echo "Docker image successfully built:"
+          docker image ls "$IMAGE_NAME:$IMAGE_TAG"
+
+      - name: Build summary
+        shell: bash
+        env:
+          APPLICATION: ${{ inputs.application }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          {
+            echo "## Docker Build Successful"
+            echo ""
+            echo "- Application: $APPLICATION"
+            echo "- Image: $IMAGE_NAME:$IMAGE_TAG"
+            echo "- Published: No"
+          } >> "$GITHUB_STEP_SUMMARY"
