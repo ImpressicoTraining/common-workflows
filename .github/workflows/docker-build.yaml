@@ -21,10 +21,12 @@ on:
 
 permissions:
   contents: read
+  packages: write
+  id-token: write
 
 jobs:
   docker-build:
-    name: Build and Scan ${{ inputs.application }} image
+    name: Build, Scan and Sign ${{ inputs.application }} image
     runs-on: ubuntu-latest
 
     env:
@@ -113,7 +115,21 @@ jobs:
           grype version
 
       # --------------------------------------------------
-      # 8. Validate build inputs
+      # 8. Install Cosign for keyless signing
+      # --------------------------------------------------
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.0.0
+
+      # --------------------------------------------------
+      # 9. Verify Cosign installation
+      # --------------------------------------------------
+
+      - name: Verify Cosign installation
+        run: cosign version
+
+      # --------------------------------------------------
+      # 10. Validate build inputs
       # --------------------------------------------------
 
       - name: Validate build inputs
@@ -146,7 +162,7 @@ jobs:
           fi
 
       # --------------------------------------------------
-      # 9. Prepare Docker build context
+      # 11. Prepare Docker build context
       # --------------------------------------------------
 
       - name: Prepare Docker build context
@@ -221,14 +237,14 @@ jobs:
           fi
 
       # --------------------------------------------------
-      # 10. Set up Docker Buildx
+      # 12. Set up Docker Buildx
       # --------------------------------------------------
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       # --------------------------------------------------
-      # 11. Build Docker image
+      # 13. Build Docker image
       # --------------------------------------------------
 
       - name: Build Docker image
@@ -244,7 +260,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ inputs.application }}
 
       # --------------------------------------------------
-      # 12. Verify Docker image
+      # 14. Verify Docker image
       # --------------------------------------------------
 
       - name: Verify Docker image
@@ -264,7 +280,7 @@ jobs:
           docker image ls "$IMAGE"
 
       # --------------------------------------------------
-      # 13. Run Trivy security scan
+      # 15. Run Trivy security scan
       # --------------------------------------------------
 
       - name: Run Trivy scan
@@ -279,8 +295,7 @@ jobs:
             "$IMAGE" security-reports
 
       # --------------------------------------------------
-      # 14. Run Grype security scan
-      # Run even if Trivy fails
+      # 16. Run Grype security scan
       # --------------------------------------------------
 
       - name: Run Grype scan
@@ -295,7 +310,7 @@ jobs:
             "$IMAGE" security-reports
 
       # --------------------------------------------------
-      # 15. Upload security reports
+      # 17. Upload security reports
       # --------------------------------------------------
 
       - name: Upload security scan reports
@@ -308,7 +323,100 @@ jobs:
           retention-days: 30
 
       # --------------------------------------------------
-      # 16. Build and security summary
+      # 18. Login to GitHub Container Registry
+      # Only on push to main
+      # --------------------------------------------------
+
+      - name: Login to GitHub Container Registry
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --------------------------------------------------
+      # 19. Push existing local image to GHCR
+      # No rebuild takes place here
+      # --------------------------------------------------
+
+      - name: Push Docker image to GHCR
+        id: push-ghcr
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        shell: bash
+        env:
+          LOCAL_IMAGE: ${{ inputs.image_name }}:${{ inputs.image_tag }}
+          IMAGE_NAME: ${{ inputs.image_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          IMAGE_BASENAME="${IMAGE_NAME##*/}"
+          GHCR_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_BASENAME,,}"
+
+          echo "Pushing image to GHCR: $GHCR_IMAGE:$IMAGE_TAG"
+
+          docker tag "$LOCAL_IMAGE" "$GHCR_IMAGE:$IMAGE_TAG"
+
+          docker push "$GHCR_IMAGE:$IMAGE_TAG" \
+            2>&1 | tee "$RUNNER_TEMP/ghcr-push.log"
+
+          DIGEST="$(grep -oE 'digest: sha256:[a-f0-9]{64}' \
+            "$RUNNER_TEMP/ghcr-push.log" | awk '{print $2}' | tail -n 1)"
+
+          if [[ ! "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "Could not extract image digest from GHCR push."
+            exit 1
+          fi
+
+          echo "image=$GHCR_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+          echo "Published image: $GHCR_IMAGE@$DIGEST"
+
+      # --------------------------------------------------
+      # 20. Sign image using keyless Cosign
+      # --------------------------------------------------
+
+      - name: Sign Docker image with Cosign
+        id: sign-image
+        if: ${{ steps.push-ghcr.outcome == 'success' }}
+        shell: bash
+        env:
+          IMAGE: ${{ steps.push-ghcr.outputs.image }}
+          DIGEST: ${{ steps.push-ghcr.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          echo "Signing image: $IMAGE@$DIGEST"
+
+          cosign sign --yes "$IMAGE@$DIGEST"
+
+      # --------------------------------------------------
+      # 21. Verify Cosign signature
+      # --------------------------------------------------
+
+      - name: Verify Cosign signature
+        id: verify-signature
+        if: ${{ steps.sign-image.outcome == 'success' }}
+        shell: bash
+        env:
+          IMAGE: ${{ steps.push-ghcr.outputs.image }}
+          DIGEST: ${{ steps.push-ghcr.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-identity "https://github.com/ImpressicoTraining/common-workflows/.github/workflows/docker-build.yaml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+            --certificate-github-workflow-ref "$GITHUB_REF" \
+            --certificate-github-workflow-trigger "push"
+
+          echo "Cosign signature verification successful."
+
+      # --------------------------------------------------
+      # 22. Build and security summary
       # --------------------------------------------------
 
       - name: Build and security summary
@@ -322,17 +430,22 @@ jobs:
           VERIFY_STATUS: ${{ steps.verify-image.outcome }}
           TRIVY_STATUS: ${{ steps.trivy-scan.outcome }}
           GRYPE_STATUS: ${{ steps.grype-scan.outcome }}
+          PUSH_STATUS: ${{ steps.push-ghcr.outcome }}
+          SIGN_STATUS: ${{ steps.sign-image.outcome }}
+          COSIGN_VERIFY_STATUS: ${{ steps.verify-signature.outcome }}
         run: |
           {
-            echo "## Docker Build and Security Scan Summary"
+            echo "## Docker Build, Security and Signing Summary"
             echo ""
             echo "| Check | Result |"
             echo "|---|---|"
             echo "| Application | $APPLICATION |"
-            echo "| Image | $IMAGE_NAME:$IMAGE_TAG |"
+            echo "| Local image | $IMAGE_NAME:$IMAGE_TAG |"
             echo "| Docker build | ${BUILD_STATUS:-not-run} |"
             echo "| Image verification | ${VERIFY_STATUS:-not-run} |"
             echo "| Trivy scan | ${TRIVY_STATUS:-not-run} |"
             echo "| Grype scan | ${GRYPE_STATUS:-not-run} |"
-            echo "| Published | No |"
+            echo "| GHCR push | ${PUSH_STATUS:-not-run} |"
+            echo "| Cosign signing | ${SIGN_STATUS:-not-run} |"
+            echo "| Cosign verification | ${COSIGN_VERIFY_STATUS:-not-run} |"
           } >> "$GITHUB_STEP_SUMMARY"
