@@ -21,15 +21,101 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   docker-build:
-    name: Build ${{ inputs.application }} image
+    name: Build and Scan ${{ inputs.application }} image
     runs-on: ubuntu-latest
 
+    env:
+      TRIVY_VERSION: v0.68.2
+      GRYPE_VERSION: v0.121.3
+
     steps:
+      # --------------------------------------------------
+      # 1. Checkout application repository
+      # --------------------------------------------------
+
       - name: Checkout application repository
         uses: actions/checkout@v4
+
+      # --------------------------------------------------
+      # 2. Checkout centralized security scripts
+      # --------------------------------------------------
+
+      - name: Checkout common-workflows security scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ImpressicoTraining/common-workflows
+          ref: main
+          path: common-workflows
+          persist-credentials: false
+
+      # --------------------------------------------------
+      # 3. Install or restore Trivy
+      # --------------------------------------------------
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@e07451d2e059ed86c2870430ea286b3a9e0bf241
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache: true
+
+      # --------------------------------------------------
+      # 4. Cache Grype binary
+      # --------------------------------------------------
+
+      - name: Cache Grype binary
+        id: grype-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/grype-bin
+          key: grype-${{ runner.os }}-${{ runner.arch }}-${{ env.GRYPE_VERSION }}
+
+      # --------------------------------------------------
+      # 5. Install Grype only on cache miss
+      # --------------------------------------------------
+
+      - name: Install Grype
+        if: steps.grype-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/grype-bin"
+
+          curl -sSfL https://get.anchore.io/grype \
+            | sh -s -- -b "$RUNNER_TEMP/grype-bin" "$GRYPE_VERSION"
+
+      # --------------------------------------------------
+      # 6. Add Grype to PATH
+      # --------------------------------------------------
+
+      - name: Add Grype to PATH
+        shell: bash
+        run: |
+          echo "$RUNNER_TEMP/grype-bin" >> "$GITHUB_PATH"
+
+      # --------------------------------------------------
+      # 7. Verify security tools
+      # --------------------------------------------------
+
+      - name: Verify security tools
+        id: verify-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking Trivy..."
+          trivy version
+
+          echo "Checking Grype..."
+          grype version
+
+      # --------------------------------------------------
+      # 8. Validate build inputs
+      # --------------------------------------------------
 
       - name: Validate build inputs
         shell: bash
@@ -59,6 +145,10 @@ jobs:
             echo "Invalid image tag: $IMAGE_TAG"
             exit 1
           fi
+
+      # --------------------------------------------------
+      # 9. Prepare Docker build context
+      # --------------------------------------------------
 
       - name: Prepare Docker build context
         id: context
@@ -131,10 +221,19 @@ jobs:
             echo "path=$CONTEXT" >> "$GITHUB_OUTPUT"
           fi
 
+      # --------------------------------------------------
+      # 10. Set up Docker Buildx
+      # --------------------------------------------------
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # --------------------------------------------------
+      # 11. Build Docker image
+      # --------------------------------------------------
+
       - name: Build Docker image
+        id: build-image
         uses: docker/build-push-action@v6
         with:
           context: ${{ steps.context.outputs.path }}
@@ -145,7 +244,12 @@ jobs:
           cache-from: type=gha,scope=${{ inputs.application }}
           cache-to: type=gha,mode=max,scope=${{ inputs.application }}
 
+      # --------------------------------------------------
+      # 12. Verify Docker image
+      # --------------------------------------------------
+
       - name: Verify Docker image
+        id: verify-image
         shell: bash
         env:
           IMAGE_NAME: ${{ inputs.image_name }}
@@ -153,22 +257,81 @@ jobs:
         run: |
           set -euo pipefail
 
-          docker image inspect "$IMAGE_NAME:$IMAGE_TAG"
+          IMAGE="$IMAGE_NAME:$IMAGE_TAG"
+
+          docker image inspect "$IMAGE"
 
           echo "Docker image successfully built:"
-          docker image ls "$IMAGE_NAME:$IMAGE_TAG"
+          docker image ls "$IMAGE"
 
-      - name: Build summary
+      # --------------------------------------------------
+      # 13. Run Trivy security scan
+      # --------------------------------------------------
+
+      - name: Run Trivy scan
+        id: trivy-scan
+        if: ${{ !cancelled() && steps.verify-image.outcome == 'success' && steps.verify-tools.outcome == 'success' }}
+        shell: bash
+        env:
+          IMAGE: ${{ inputs.image_name }}:${{ inputs.image_tag }}
+        run: |
+          bash common-workflows/scripts/trivy.sh \
+            "$IMAGE" security-reports
+
+      # --------------------------------------------------
+      # 14. Run Grype security scan
+      # Run even if Trivy fails
+      # --------------------------------------------------
+
+      - name: Run Grype scan
+        id: grype-scan
+        if: ${{ !cancelled() && steps.verify-image.outcome == 'success' && steps.verify-tools.outcome == 'success' }}
+        shell: bash
+        env:
+          IMAGE: ${{ inputs.image_name }}:${{ inputs.image_tag }}
+        run: |
+          bash common-workflows/scripts/grype.sh \
+            "$IMAGE" security-reports
+
+      # --------------------------------------------------
+      # 15. Upload security reports
+      # --------------------------------------------------
+
+      - name: Upload security scan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.application }}-security-reports
+          path: security-reports/
+          if-no-files-found: warn
+          retention-days: 30
+
+      # --------------------------------------------------
+      # 16. Build and security summary
+      # --------------------------------------------------
+
+      - name: Build and security summary
+        if: always()
         shell: bash
         env:
           APPLICATION: ${{ inputs.application }}
           IMAGE_NAME: ${{ inputs.image_name }}
           IMAGE_TAG: ${{ inputs.image_tag }}
+          BUILD_STATUS: ${{ steps.build-image.outcome }}
+          VERIFY_STATUS: ${{ steps.verify-image.outcome }}
+          TRIVY_STATUS: ${{ steps.trivy-scan.outcome }}
+          GRYPE_STATUS: ${{ steps.grype-scan.outcome }}
         run: |
           {
-            echo "## Docker Build Successful"
+            echo "## Docker Build and Security Scan Summary"
             echo ""
-            echo "- Application: $APPLICATION"
-            echo "- Image: $IMAGE_NAME:$IMAGE_TAG"
-            echo "- Published: No"
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Application | $APPLICATION |"
+            echo "| Image | $IMAGE_NAME:$IMAGE_TAG |"
+            echo "| Docker build | ${BUILD_STATUS:-not-run} |"
+            echo "| Image verification | ${VERIFY_STATUS:-not-run} |"
+            echo "| Trivy scan | ${TRIVY_STATUS:-not-run} |"
+            echo "| Grype scan | ${GRYPE_STATUS:-not-run} |"
+            echo "| Published | No |"
           } >> "$GITHUB_STEP_SUMMARY"
