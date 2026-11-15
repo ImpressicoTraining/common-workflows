@@ -1,0 +1,173 @@
+
+name: Central Security Scan
+
+on:
+  workflow_call:
+    inputs:
+      application:
+        description: "Application being scanned"
+        required: true
+        type: string
+
+      image_name:
+        description: "Local Docker image name"
+        required: true
+        type: string
+
+      image_tag:
+        description: "Docker image tag"
+        required: true
+        type: string
+
+      artifact_name:
+        description: "Uploaded Docker image archive artifact"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  security-scan:
+    name: Scan ${{ inputs.application }} image
+    runs-on: ubuntu-latest
+
+    env:
+      IMAGE: ${{ inputs.image_name }}:${{ inputs.image_tag }}
+      TRIVY_VERSION: v0.68.2
+      GRYPE_VERSION: v0.121.3
+
+    steps:
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: image-artifact
+
+      - name: Load Docker image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f image-artifact/image.tar
+
+          docker load --input image-artifact/image.tar
+
+          docker image inspect "$IMAGE"
+
+          echo "Loaded image: $IMAGE"
+
+      - name: Checkout common-workflows security scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ImpressicoTraining/common-workflows
+          ref: main
+          path: common-workflows
+          persist-credentials: false
+
+      # Cache Trivy vulnerability database separately from its binary.
+      - name: Cache Trivy database
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: |
+            trivy-db-${{ runner.os }}-${{ runner.arch }}-
+
+      # setup-trivy caches the Trivy binary when cache is enabled.
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@e07451d2e059ed86c2870430ea286b3a9e0bf241
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          cache: true
+
+      # Cache Grype binary by version.
+      - name: Cache Grype binary
+        id: grype-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/grype-bin
+          key: grype-${{ runner.os }}-${{ runner.arch }}-${{ env.GRYPE_VERSION }}
+
+      - name: Install Grype
+        if: steps.grype-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GRYPE_VERSION: ${{ env.GRYPE_VERSION }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/grype-bin"
+
+          curl -sSfL https://get.anchore.io/grype \
+            | sh -s -- -b "$RUNNER_TEMP/grype-bin" "$GRYPE_VERSION"
+
+      - name: Add Grype to PATH
+        shell: bash
+        run: |
+          echo "$RUNNER_TEMP/grype-bin" >> "$GITHUB_PATH"
+
+      - name: Verify scanner versions
+        shell: bash
+        run: |
+          trivy version
+          grype version
+
+      # Cache Grype vulnerability database.
+      - name: Cache Grype database
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/grype
+          key: grype-db-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: |
+            grype-db-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Run Trivy scan
+        id: trivy
+        shell: bash
+        env:
+          TRIVY_CACHE_DIR: ~/.cache/trivy
+        run: |
+          bash common-workflows/scripts/trivy.sh \
+            "$IMAGE" security-reports
+
+      # Run Grype even if Trivy fails.
+      - name: Run Grype scan
+        id: grype
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          GRYPE_DB_CACHE_DIR: ~/.cache/grype
+        run: |
+          bash common-workflows/scripts/grype.sh \
+            "$IMAGE" security-reports
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.application }}-security-reports
+          path: security-reports/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Security scan summary
+        if: always()
+        shell: bash
+        env:
+          APPLICATION: ${{ inputs.application }}
+          IMAGE: ${{ env.IMAGE }}
+          TRIVY_STATUS: ${{ steps.trivy.outcome }}
+          GRYPE_STATUS: ${{ steps.grype.outcome }}
+        run: |
+          {
+            echo "## Security Scan Summary"
+            echo ""
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Application | $APPLICATION |"
+            echo "| Image | $IMAGE |"
+            echo "| Trivy | ${TRIVY_STATUS:-not-run} |"
+            echo "| Grype | ${GRYPE_STATUS:-not-run} |"
+          } >> "$GITHUB_STEP_SUMMARY"
