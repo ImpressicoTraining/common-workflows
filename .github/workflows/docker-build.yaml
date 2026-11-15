@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      TRIVY_VERSION: v0.68.2
+      TRIVY_VERSION: v0.76.2
       GRYPE_VERSION: v0.121.3
 
     steps:
