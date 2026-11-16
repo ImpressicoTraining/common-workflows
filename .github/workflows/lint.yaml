@@ -1,0 +1,403 @@
+
+name: Centralized Code Linting
+
+on:
+  workflow_call:
+    inputs:
+
+      # ---------------------------------------------
+      # Language and runtime configuration
+      # ---------------------------------------------
+
+      languages:
+        description: Comma-separated languages: python,javascript,go,java
+        required: false
+        type: string
+        default: ""
+
+      python_version:
+        required: false
+        type: string
+        default: "3.12"
+
+      node_version:
+        required: false
+        type: string
+        default: "22"
+
+      go_version:
+        required: false
+        type: string
+        default: "1.24"
+
+      java_version:
+        required: false
+        type: string
+        default: "21"
+
+      # ---------------------------------------------
+      # Language-specific lint switches
+      # ---------------------------------------------
+
+      python_lint:
+        required: false
+        type: boolean
+        default: false
+
+      javascript_lint:
+        required: false
+        type: boolean
+        default: false
+
+      go_lint:
+        required: false
+        type: boolean
+        default: false
+
+      java_lint:
+        required: false
+        type: boolean
+        default: false
+
+      # ---------------------------------------------
+      # Infrastructure lint switches
+      # ---------------------------------------------
+
+      yaml_lint:
+        required: false
+        type: boolean
+        default: true
+
+      dockerfile_lint:
+        required: false
+        type: boolean
+        default: true
+
+      shell_lint:
+        required: false
+        type: boolean
+        default: false
+
+      helm_lint:
+        required: false
+        type: boolean
+        default: false
+
+      # ---------------------------------------------
+      # Source paths
+      # ---------------------------------------------
+
+      python_paths:
+        required: false
+        type: string
+        default: "."
+
+      javascript_paths:
+        required: false
+        type: string
+        default: "."
+
+      go_paths:
+        required: false
+        type: string
+        default: "."
+
+      java_paths:
+        required: false
+        type: string
+        default: "."
+
+      yaml_paths:
+        required: false
+        type: string
+        default: "."
+
+      dockerfile_paths:
+        required: false
+        type: string
+        default: "."
+
+      shell_paths:
+        required: false
+        type: string
+        default: "."
+
+      helm_chart_paths:
+        required: false
+        type: string
+        default: "."
+
+      # ---------------------------------------------
+      # Custom commands
+      # ---------------------------------------------
+
+      custom_commands:
+        description: Optional multiline shell commands
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and Code Quality
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ---------------------------------------------
+      # 1. Checkout source repository
+      # ---------------------------------------------
+
+      - name: Checkout application repository
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------
+      # 2. Set up Python
+      # ---------------------------------------------
+
+      - name: Set up Python
+        if: inputs.python_lint
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Ruff
+        if: inputs.python_lint
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      - name: Run Ruff
+        if: inputs.python_lint
+        shell: bash
+        env:
+          PATHS: ${{ inputs.python_paths }}
+        run: |
+          set -euo pipefail
+
+          read -r -a TARGETS <<< "$PATHS"
+
+          ruff check "${TARGETS[@]}"
+          ruff format --check "${TARGETS[@]}"
+
+      # ---------------------------------------------
+      # 3. Set up Node.js
+      # ---------------------------------------------
+
+      - name: Set up Node.js
+        if: inputs.javascript_lint
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Install JavaScript dependencies
+        if: inputs.javascript_lint
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npm ci
+
+      - name: Run ESLint
+        if: inputs.javascript_lint
+        shell: bash
+        env:
+          PATHS: ${{ inputs.javascript_paths }}
+        run: |
+          set -euo pipefail
+
+          read -r -a TARGETS <<< "$PATHS"
+
+          npx eslint "${TARGETS[@]}"
+
+      # ---------------------------------------------
+      # 4. Set up Go
+      # ---------------------------------------------
+
+      - name: Set up Go
+        if: inputs.go_lint
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go_version }}
+
+      - name: Install golangci-lint
+        if: inputs.go_lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          install-only: true
+
+      - name: Run Go lint
+        if: inputs.go_lint
+        shell: bash
+        env:
+          PATHS: ${{ inputs.go_paths }}
+        run: |
+          set -euo pipefail
+
+          golangci-lint run $PATHS
+
+      # ---------------------------------------------
+      # 5. Set up Java
+      # ---------------------------------------------
+
+      - name: Set up Java
+        if: inputs.java_lint
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+
+      - name: Run Java Checkstyle
+        if: inputs.java_lint
+        shell: bash
+        env:
+          PATHS: ${{ inputs.java_paths }}
+        run: |
+          set -euo pipefail
+
+          echo "Java lint requires a configured Checkstyle ruleset."
+          echo "Provide the ruleset and project build integration before enabling this check."
+
+      # ---------------------------------------------
+      # 6. YAML lint
+      # ---------------------------------------------
+
+      - name: Install yamllint
+        if: inputs.yaml_lint
+        run: |
+          python -m pip install yamllint
+
+      - name: Run YAML lint
+        if: inputs.yaml_lint
+        shell: bash
+        env:
+          PATHS: ${{ inputs.yaml_paths }}
+        run: |
+          set -euo pipefail
+
+          read -r -a TARGETS <<< "$PATHS"
+
+          yamllint -d relaxed --strict "${TARGETS[@]}"
+
+      # ---------------------------------------------
+      # 7. Dockerfile lint
+      # ---------------------------------------------
+
+      - name: Run Hadolint
+        if: inputs.dockerfile_lint
+        shell: bash
+        env:
+          PATHS: ${{ inputs.dockerfile_paths }}
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r -d '' FILE; do
+            echo "Linting $FILE"
+
+            docker run --rm -i hadolint/hadolint:latest \
+              < "$FILE"
+
+          done < <(
+            find $PATHS -type f \
+              \( -name 'Dockerfile' -o -name '*.dockerfile' \) \
+              -not -path '*/node_modules/*' \
+              -not -path '*/.git/*' \
+              -print0
+          )
+
+      # ---------------------------------------------
+      # 8. ShellCheck
+      # ---------------------------------------------
+
+      - name: Install ShellCheck
+        if: inputs.shell_lint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck
+        if: inputs.shell_lint
+        shell: bash
+        env:
+          PATHS: ${{ inputs.shell_paths }}
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r -d '' FILE; do
+            echo "Linting $FILE"
+            shellcheck "$FILE"
+          done < <(
+            find $PATHS -type f \
+              \( -name '*.sh' -o -name '*.bash' \) \
+              -not -path '*/.git/*' \
+              -print0
+          )
+
+      # ---------------------------------------------
+      # 9. Helm lint
+      # ---------------------------------------------
+
+      - name: Install Helm
+        if: inputs.helm_lint
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Run Helm lint
+        if: inputs.helm_lint
+        shell: bash
+        env:
+          PATHS: ${{ inputs.helm_chart_paths }}
+        run: |
+          set -euo pipefail
+
+          read -r -a TARGETS <<< "$PATHS"
+
+          for CHART in "${TARGETS[@]}"; do
+            helm lint "$CHART"
+          done
+
+      # ---------------------------------------------
+      # 10. Custom commands
+      # ---------------------------------------------
+
+      - name: Run custom lint commands
+        if: inputs.custom_commands != ''
+        shell: bash
+        env:
+          CUSTOM_COMMANDS: ${{ inputs.custom_commands }}
+        run: |
+          set -euo pipefail
+
+          bash -euo pipefail -c "$CUSTOM_COMMANDS"
+
+      # ---------------------------------------------
+      # 11. Summary
+      # ---------------------------------------------
+
+      - name: Lint summary
+        if: always()
+        shell: bash
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "## Centralized Lint Summary"
+            echo ""
+            echo "| Check | Enabled |"
+            echo "|---|---|"
+            echo "| Python | ${{ inputs.python_lint }} |"
+            echo "| JavaScript | ${{ inputs.javascript_lint }} |"
+            echo "| Go | ${{ inputs.go_lint }} |"
+            echo "| Java | ${{ inputs.java_lint }} |"
+            echo "| YAML | ${{ inputs.yaml_lint }} |"
+            echo "| Dockerfile | ${{ inputs.dockerfile_lint }} |"
+            echo "| Shell | ${{ inputs.shell_lint }} |"
+            echo "| Helm | ${{ inputs.helm_lint }} |"
+            echo ""
+            echo "Workflow status: $JOB_STATUS"
+          } >> "$GITHUB_STEP_SUMMARY"
