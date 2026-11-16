@@ -15,21 +15,31 @@ if [[ -z "${GITHUB_OUTPUT:-}" ]]; then
   exit 1
 fi
 
-# ISO week-year: for example, week 47 of 2026 = 2647.
+# Generate ISO week-year.
+# Example: week 47 of 2026 = 2647.
 MAJOR="$(date -u +%g%V)"
 
 VERSION_PREFIX="${MAJOR}.${MINOR}.${PATCH}-DEV"
 
-echo "Fetching existing Git tags..."
+echo "Repository: $GITHUB_REPOSITORY"
+echo "Version prefix: $VERSION_PREFIX"
+
+# Fetch tags belonging to the calling application repository.
 git fetch --force --tags origin
 
-# Find the highest existing DEV build number for this version.
+# Find the highest existing DEV build number for this prefix.
 LATEST_BUILD="$(
   git tag --list "${VERSION_PREFIX}.*" |
-  grep -E "^${VERSION_PREFIX//./\\.}\.[0-9]+$" |
-  sed -E 's/.*\.([0-9]+)$/\1/' |
+  awk -v prefix="${VERSION_PREFIX}." '
+    index($0, prefix) == 1 {
+      suffix = substr($0, length(prefix) + 1)
+      if (suffix ~ /^[0-9]+$/) {
+        print suffix
+      }
+    }
+  ' |
   sort -n |
-  tail -n 1 || true
+  tail -n 1
 )"
 
 if [[ -z "$LATEST_BUILD" ]]; then
@@ -40,15 +50,19 @@ fi
 
 VERSION="${VERSION_PREFIX}.${NEXT_BUILD}"
 
-echo "Next DEV version: $VERSION"
+echo "Generated version: $VERSION"
 
-# Reserve the version immediately to avoid reusing it after a failed build.
+# Configure Git identity.
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-git tag -a "$VERSION" -m "Reserve DEV version $VERSION"
+# Reserve this version in the calling application's repository.
+git tag -a "$VERSION" \
+  -m "Reserve DEV version $VERSION"
+
 git push origin "refs/tags/$VERSION"
 
+# Return version to the reusable workflow caller.
 echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-echo "Reserved version: $VERSION"
+echo "Successfully reserved: $VERSION"
