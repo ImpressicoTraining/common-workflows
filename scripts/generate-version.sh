@@ -1,5 +1,6 @@
 
 #!/usr/bin/env bash
+
 set -Eeuo pipefail
 
 MINOR="${1:-0}"
@@ -15,27 +16,24 @@ if [[ -z "${GITHUB_OUTPUT:-}" ]]; then
   exit 1
 fi
 
-# Generate ISO week-year.
-# Example: week 47 of 2026 = 2647.
-MAJOR="$(date -u +%g%V)"
+echo "Repository: ${GITHUB_REPOSITORY:-unknown}"
 
+# ISO week-year.
+MAJOR="$(date -u +%g%V)"
 VERSION_PREFIX="${MAJOR}.${MINOR}.${PATCH}-DEV"
 
-echo "Repository: $GITHUB_REPOSITORY"
 echo "Version prefix: $VERSION_PREFIX"
 
-# Fetch tags belonging to the calling application repository.
+# Fetch existing tags.
 git fetch --force --tags origin
 
-# Find the highest existing DEV build number for this prefix.
+# Find the latest build number.
 LATEST_BUILD="$(
   git tag --list "${VERSION_PREFIX}.*" |
   awk -v prefix="${VERSION_PREFIX}." '
     index($0, prefix) == 1 {
       suffix = substr($0, length(prefix) + 1)
-      if (suffix ~ /^[0-9]+$/) {
-        print suffix
-      }
+      if (suffix ~ /^[0-9]+$/) print suffix
     }
   ' |
   sort -n |
@@ -52,17 +50,8 @@ VERSION="${VERSION_PREFIX}.${NEXT_BUILD}"
 
 echo "Generated version: $VERSION"
 
-# Configure Git identity.
-git config user.name "github-actions[bot]"
-git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-# Reserve this version in the calling application's repository.
-git tag -a "$VERSION" \
-  -m "Reserve DEV version $VERSION"
-
-git push origin "refs/tags/$VERSION"
-
-# Return version to the reusable workflow caller.
+# Export version for subsequent jobs.
 echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-echo "Successfully reserved: $VERSION"
+echo "Version generated successfully."
+echo "Tag creation will happen after Main workflow succeeds."
