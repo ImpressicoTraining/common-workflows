@@ -10,7 +10,7 @@ on:
       # ---------------------------------------------
 
       languages:
-        description: Comma-separated languages: python,javascript,go,java
+        description: "Comma-separated languages: python, javascript, go, java"
         required: false
         type: string
         default: ""
@@ -132,7 +132,7 @@ on:
       # ---------------------------------------------
 
       custom_commands:
-        description: Optional multiline shell commands
+        description: "Optional multiline shell commands"
         required: false
         type: string
         default: ""
@@ -166,6 +166,7 @@ jobs:
 
       - name: Install Ruff
         if: inputs.python_lint
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install ruff
@@ -198,7 +199,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           npm ci
 
       - name: Run ESLint
@@ -238,7 +238,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          golangci-lint run $PATHS
+          read -r -a TARGETS <<< "$PATHS"
+
+          golangci-lint run "${TARGETS[@]}"
 
       # ---------------------------------------------
       # 5. Set up Java
@@ -251,16 +253,15 @@ jobs:
           distribution: temurin
           java-version: ${{ inputs.java_version }}
 
-      - name: Run Java Checkstyle
+      - name: Java lint configuration notice
         if: inputs.java_lint
         shell: bash
         env:
           PATHS: ${{ inputs.java_paths }}
         run: |
-          set -euo pipefail
-
-          echo "Java lint requires a configured Checkstyle ruleset."
-          echo "Provide the ruleset and project build integration before enabling this check."
+          echo "Java runtime configured."
+          echo "A Checkstyle ruleset and project integration are still required."
+          echo "Java lint is not yet implemented in this reusable workflow."
 
       # ---------------------------------------------
       # 6. YAML lint
@@ -268,6 +269,7 @@ jobs:
 
       - name: Install yamllint
         if: inputs.yaml_lint
+        shell: bash
         run: |
           python -m pip install yamllint
 
@@ -295,19 +297,38 @@ jobs:
         run: |
           set -euo pipefail
 
-          while IFS= read -r -d '' FILE; do
-            echo "Linting $FILE"
+          read -r -a TARGETS <<< "$PATHS"
 
-            docker run --rm -i hadolint/hadolint:latest \
-              < "$FILE"
+          FOUND=false
 
-          done < <(
-            find $PATHS -type f \
-              \( -name 'Dockerfile' -o -name '*.dockerfile' \) \
-              -not -path '*/node_modules/*' \
-              -not -path '*/.git/*' \
-              -print0
-          )
+          for TARGET in "${TARGETS[@]}"; do
+
+            if [[ -f "$TARGET" ]]; then
+              FILES=("$TARGET")
+            elif [[ -d "$TARGET" ]]; then
+              mapfile -d '' FILES < <(
+                find "$TARGET" -type f \
+                  \( -name 'Dockerfile' -o -name '*.dockerfile' \) \
+                  -not -path '*/node_modules/*' \
+                  -not -path '*/.git/*' \
+                  -print0
+              )
+            else
+              echo "WARNING: Dockerfile path not found: $TARGET"
+              continue
+            fi
+
+            for FILE in "${FILES[@]}"; do
+              FOUND=true
+              echo "Linting $FILE"
+
+              docker run --rm -i hadolint/hadolint:latest < "$FILE"
+            done
+          done
+
+          if [[ "$FOUND" == false ]]; then
+            echo "No Dockerfiles found. Skipping Hadolint."
+          fi
 
       # ---------------------------------------------
       # 8. ShellCheck
@@ -315,6 +336,7 @@ jobs:
 
       - name: Install ShellCheck
         if: inputs.shell_lint
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
@@ -327,15 +349,36 @@ jobs:
         run: |
           set -euo pipefail
 
-          while IFS= read -r -d '' FILE; do
-            echo "Linting $FILE"
-            shellcheck "$FILE"
-          done < <(
-            find $PATHS -type f \
-              \( -name '*.sh' -o -name '*.bash' \) \
-              -not -path '*/.git/*' \
-              -print0
-          )
+          read -r -a TARGETS <<< "$PATHS"
+
+          FOUND=false
+
+          for TARGET in "${TARGETS[@]}"; do
+
+            if [[ -f "$TARGET" ]]; then
+              FILES=("$TARGET")
+            elif [[ -d "$TARGET" ]]; then
+              mapfile -d '' FILES < <(
+                find "$TARGET" -type f \
+                  \( -name '*.sh' -o -name '*.bash' \) \
+                  -not -path '*/.git/*' \
+                  -print0
+              )
+            else
+              echo "WARNING: Shell script path not found: $TARGET"
+              continue
+            fi
+
+            for FILE in "${FILES[@]}"; do
+              FOUND=true
+              echo "Linting $FILE"
+              shellcheck "$FILE"
+            done
+          done
+
+          if [[ "$FOUND" == false ]]; then
+            echo "No shell scripts found. Skipping ShellCheck."
+          fi
 
       # ---------------------------------------------
       # 9. Helm lint
@@ -358,6 +401,11 @@ jobs:
           read -r -a TARGETS <<< "$PATHS"
 
           for CHART in "${TARGETS[@]}"; do
+            if [[ ! -d "$CHART" ]]; then
+              echo "ERROR: Helm chart directory not found: $CHART"
+              exit 1
+            fi
+
             helm lint "$CHART"
           done
 
