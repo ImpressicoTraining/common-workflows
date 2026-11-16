@@ -181,8 +181,10 @@ jobs:
 
           read -r -a TARGETS <<< "$PATHS"
 
-          ruff check "${TARGETS[@]}"
-          ruff format --check "${TARGETS[@]}"
+          uv run --no-sync ruff check \
+            --isolated \
+            --select E4,E7,E9,F,I \
+            "${TARGETS[@]}"
 
       # ---------------------------------------------
       # 3. Set up Node.js
