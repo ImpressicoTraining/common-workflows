@@ -1,0 +1,60 @@
+
+name: Generate Release Version
+
+on:
+  workflow_call:
+    inputs:
+      minor:
+        description: Minor release number
+        required: false
+        type: string
+        default: "0"
+
+      patch:
+        description: Patch release number
+        required: false
+        type: string
+        default: "0"
+
+    outputs:
+      version:
+        description: Generated DEV version
+        value: ${{ jobs.generate.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: Generate and Reserve DEV Version
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    outputs:
+      version: ${{ steps.generate.outputs.version }}
+
+    steps:
+      - name: Checkout application repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout common-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: ImpressicoTraining/common-workflows
+          ref: main
+          path: common-workflows
+          persist-credentials: false
+
+      - name: Generate and reserve version
+        id: generate
+        shell: bash
+        env:
+          MINOR: ${{ inputs.minor }}
+          PATCH: ${{ inputs.patch }}
+        run: |
+          bash common-workflows/scripts/generate-version.sh \
+            "$MINOR" "$PATCH"
