@@ -300,56 +300,9 @@ jobs:
       # GitHub Actions workflow lint
       # ---------------------------------------------
 
-      - name: Set up Go for actionlint
-        if: inputs.github_actions_lint
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-
-      - name: Install actionlint
-        if: inputs.github_actions_lint
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          go install github.com/rhysd/actionlint/cmd/actionlint@latest
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
       - name: Run GitHub Actions lint
         if: inputs.github_actions_lint
-        shell: bash
-        env:
-          PATHS: ${{ inputs.yaml_paths }}
-        run: |
-          set -euo pipefail
-
-          read -r -a TARGETS <<< "$PATHS"
-          FILES=()
-
-          for TARGET in "${TARGETS[@]}"; do
-            if [[ -f "$TARGET" ]]; then
-              FILES+=("$TARGET")
-            elif [[ -d "$TARGET" ]]; then
-              while IFS= read -r -d '' FILE; do
-                FILES+=("$FILE")
-              done < <(
-                find "$TARGET" -type f \
-                  \( -name '*.yml' -o -name '*.yaml' \) \
-                  -not -path '*/.git/*' \
-                  -print0
-              )
-            else
-              echo "WARNING: GitHub Actions lint path not found: $TARGET"
-            fi
-          done
-
-          if [[ ${#FILES[@]} -eq 0 ]]; then
-            echo "ERROR: No workflow YAML files found."
-            exit 1
-          fi
-
-          actionlint -color "${FILES[@]}"
-
+        uses: reviewdog/action-actionlint@v1
 
 
       # ---------------------------------------------
