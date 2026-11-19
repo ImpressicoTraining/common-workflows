@@ -281,7 +281,6 @@ jobs:
 
       - name: Run Trivy scan
         id: trivy-scan
-        continue-on-error: true
         if: ${{ !cancelled() && steps.verify-image.outcome == 'success' && steps.verify-tools.outcome == 'success' }}
         shell: bash
         env:
@@ -296,7 +295,6 @@ jobs:
 
       - name: Run Grype scan
         id: grype-scan
-        continue-on-error: true
         if: ${{ !cancelled() && steps.verify-image.outcome == 'success' && steps.verify-tools.outcome == 'success' }}
         shell: bash
         env:
