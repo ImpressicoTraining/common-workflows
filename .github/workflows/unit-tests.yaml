@@ -50,10 +50,22 @@ jobs:
           set -euo pipefail
           bash -e -o pipefail -c "$SETUP_COMMAND"
 
-      - name: Run unit tests and enforce coverage
+      - name: Run unit tests and generate coverage report
         shell: bash
         env:
           TEST_COMMAND: ${{ inputs.test_command }}
         run: |
           set -euo pipefail
           bash -e -o pipefail -c "$TEST_COMMAND"
+          
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.application }}-coverage-report
+          path: |
+            htmlcov/
+            coverage.xml
+          if-no-files-found: ignore
+          retention-days: 7
+          
