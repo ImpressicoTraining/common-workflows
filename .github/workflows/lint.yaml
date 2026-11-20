@@ -83,6 +83,11 @@ on:
         required: false
         type: boolean
         default: false
+
+      helm_lint:
+        required: false
+        type: boolean
+        default: false
       # ---------------------------------------------
       # Source paths
       # ---------------------------------------------
@@ -388,6 +393,34 @@ jobs:
             echo "No shell scripts found. Skipping ShellCheck."
           fi
 
+      # ---------------------------------------------
+      # 9. Helm lint
+      # ---------------------------------------------
+
+      - name: Install Helm
+        if: inputs.helm_lint
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Run Helm lint
+        if: inputs.helm_lint
+        shell: bash
+        env:
+          PATHS: ${{ inputs.helm_chart_paths }}
+        run: |
+          set -euo pipefail
+
+          read -r -a TARGETS <<< "$PATHS"
+
+          for CHART in "${TARGETS[@]}"; do
+            if [[ ! -d "$CHART" ]]; then
+              echo "ERROR: Helm chart directory not found: $CHART"
+              exit 1
+            fi
+
+            helm lint "$CHART"
+          done
   
       # ---------------------------------------------
       # 10. Custom commands
@@ -425,6 +458,7 @@ jobs:
             echo "| YAML | ${{ inputs.yaml_lint }} |"
             echo "| Dockerfile | ${{ inputs.dockerfile_lint }} |"
             echo "| Shell | ${{ inputs.shell_lint }} |"
+            echo "| Helm | ${{ inputs.helm_lint }} |"
             echo "| Action lint | ${{ inputs.github_actions_lint }} |"
             echo ""
             echo "Workflow status: $JOB_STATUS"
