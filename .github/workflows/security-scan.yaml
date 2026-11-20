@@ -59,7 +59,7 @@ jobs:
           echo "Loaded image: $IMAGE"
 
       - name: Checkout common-workflows security scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ImpressicoTraining/common-workflows
           ref: main

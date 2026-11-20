@@ -106,7 +106,7 @@ jobs:
           path: image-artifact
 
       - name: Checkout common workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ImpressicoTraining/common-workflows
           ref: main
@@ -193,12 +193,12 @@ jobs:
 
     steps:
       - name: Checkout application repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.source_sha }}
 
       - name: Checkout common workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ImpressicoTraining/common-workflows
           ref: main
@@ -273,7 +273,7 @@ jobs:
           path: chart-package
 
       - name: Checkout common workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ImpressicoTraining/common-workflows
           ref: main

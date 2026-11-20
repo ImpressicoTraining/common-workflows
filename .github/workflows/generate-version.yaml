@@ -37,12 +37,12 @@ jobs:
 
     steps:
       - name: Checkout application repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Checkout common-workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ImpressicoTraining/common-workflows
           ref: main
